@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import pandas as pd
 from streamlit_cookies_manager import EncryptedCookieManager
 
 FIREBASE_API_KEY = "AIzaSyBqbxgaaGlpeb1F6HRvEW319OcuCsbkAHM"
@@ -13,10 +14,10 @@ st.set_page_config(page_title="CardLookup", page_icon="🃏", layout="wide")
 
 st.markdown("""
 <style>
-.cl-value { font-size: 1.8rem; font-weight: 600; color: #1D9E75; }
 .total-box { background: #EAF3DE; border-radius: 10px; padding: 1rem 1.5rem; text-align: center; margin-top: 1rem; }
 .total-label { font-size: 0.85rem; color: #3B6D11; font-weight: 500; }
 .total-value { font-size: 2rem; font-weight: 700; color: #1D9E75; }
+div[data-testid="stDataFrame"] table { font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -102,8 +103,36 @@ def grade_label(g):
     return "PSA " + g.replace("g", "")
 
 def fmt_price(p):
-    if p is None: return "N/A"
+    if p is None: return ""
     return f"${float(p):,.0f}"
+
+def build_table():
+    rows = []
+    for cert in st.session_state.cert_list:
+        if cert not in st.session_state.results:
+            rows.append({"Cert #": cert, "Name": "Pending...", "Grade": "", "CL Value": "", "Avg Last 5": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
+            continue
+        data = st.session_state.results[cert]
+        if "error" in data:
+            rows.append({"Cert #": cert, "Name": f"Error: {data['error']}", "Grade": "", "CL Value": "", "Avg Last 5": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
+            continue
+        card = data["card"]
+        cl = data["cl"]
+        sales = data.get("sales", [])
+        cl_val = cl.get("estimatedValue")
+        sale_prices = [s["price"] for s in sales if s.get("price")]
+        cl_avg = sum(sale_prices) / len(sale_prices) if sale_prices else None
+        sale_cols = {f"Sale {i+1}": fmt_price(sales[i]["price"]) + f"\n{sales[i]['date']}" if i < len(sales) else "" for i in range(5)}
+        row = {
+            "Cert #": cert,
+            "Name": card.get("label", "Unknown"),
+            "Grade": grade_label(card.get("grade")),
+            "CL Value": fmt_price(cl_val),
+            "Avg Last 5": fmt_price(cl_avg),
+        }
+        row.update(sale_cols)
+        rows.append(row)
+    return rows
 
 with st.sidebar:
     st.header("Account")
@@ -164,8 +193,8 @@ if st.session_state.logged_in:
 
     if st.session_state.cert_list:
         st.markdown(f"**{len(st.session_state.cert_list)} cert(s) scanned**")
-        st.markdown("**Scanned cert list:**")
 
+        st.markdown("**Scanned cert list:**")
         for i, cert in enumerate(st.session_state.cert_list):
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -200,53 +229,18 @@ if st.session_state.logged_in:
                 st.rerun()
 
         if st.session_state.results:
-            total_cl = 0
+            rows = build_table()
+            df = pd.DataFrame(rows)
 
-            for cert in st.session_state.cert_list:
-                if cert not in st.session_state.results:
-                    continue
-                data = st.session_state.results[cert]
-                if "error" in data:
-                    st.error(f"Cert {cert}: {data['error']}")
-                    continue
+            st.markdown("### Results")
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-                card = data["card"]
-                cl = data["cl"]
-                sales = data.get("sales", [])
-                cl_val = cl.get("estimatedValue")
-                if cl_val:
-                    total_cl += float(cl_val)
-
-                sale_prices = [s["price"] for s in sales if s.get("price")]
-                cl_avg = sum(sale_prices) / len(sale_prices) if sale_prices else None
-
-                with st.container(border=True):
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.markdown(f"**{card.get('label', 'Unknown')}**")
-                        pop = cl.get('population')
-                        st.caption(f"Cert #{cert} · {grade_label(card.get('grade'))} · Pop {pop:,}" if isinstance(pop, int) else f"Cert #{cert} · {grade_label(card.get('grade'))}")
-                    with col2:
-                        st.markdown(f"<div class='cl-value'>{fmt_price(cl_val)}</div><div style='font-size:0.75rem;color:#1D9E75;'>CL value</div>", unsafe_allow_html=True)
-
-                    st.divider()
-
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Last sale", fmt_price(cl.get("lastSalePrice")))
-                    c2.metric("1-month avg", fmt_price(cl.get("oneMonthData", {}).get("averagePrice")), f"{cl.get('oneMonthData', {}).get('velocity', 0)} sales")
-                    c3.metric("1-quarter avg", fmt_price(cl.get("oneQuarterData", {}).get("averagePrice")), f"{cl.get('oneQuarterData', {}).get('velocity', 0)} sales")
-                    c4.metric("1-year avg", fmt_price(cl.get("oneYearData", {}).get("averagePrice")), f"{cl.get('oneYearData', {}).get('velocity', 0)} sales")
-                    c5.metric("Confidence", f"{cl.get('confidence', 'N/A')}/10")
-
-                    if sales:
-                        st.markdown("**Last 5 sales:**")
-                        sale_cols = st.columns(len(sales))
-                        for idx, (sale, col) in enumerate(zip(sales, sale_cols)):
-                            col.metric(f"Sale {idx+1}", fmt_price(sale['price']), sale['date'])
-                        if cl_avg:
-                            st.info(f"📊 CL Avg (last {len(sales)} sales): **{fmt_price(cl_avg)}**")
-                    else:
-                        st.caption("No individual sales data available")
+            total_cl = sum(
+                float(st.session_state.results[c]["cl"].get("estimatedValue", 0))
+                for c in st.session_state.cert_list
+                if c in st.session_state.results and "cl" in st.session_state.results[c]
+                and st.session_state.results[c]["cl"].get("estimatedValue")
+            )
 
             st.markdown(f"""
             <div class='total-box'>
