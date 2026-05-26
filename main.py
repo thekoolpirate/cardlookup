@@ -14,9 +14,56 @@ st.set_page_config(page_title="CardLookup", page_icon="🃏", layout="wide")
 
 st.markdown("""
 <style>
-.total-box { background: #EAF3DE; border-radius: 10px; padding: 1rem 1.5rem; text-align: center; margin-top: 1rem; }
-.total-label { font-size: 0.85rem; color: #3B6D11; font-weight: 500; }
-.total-value { font-size: 2rem; font-weight: 700; color: #1D9E75; }
+/* Table styling */
+div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
+
+/* Total box */
+.total-box { 
+    background: linear-gradient(135deg, #0F2A1E, #1A3D2B);
+    border: 1px solid #00C48C33;
+    border-radius: 12px; 
+    padding: 1.5rem 2rem; 
+    text-align: center; 
+    margin-top: 1.5rem; 
+}
+.total-label { 
+    font-size: 0.8rem; 
+    color: #00C48C; 
+    font-weight: 600; 
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.total-value { 
+    font-size: 2.5rem; 
+    font-weight: 700; 
+    color: #FFFFFF;
+    margin-top: 4px;
+}
+
+/* Success message */
+div[data-testid="stAlert"] { border-radius: 8px; }
+
+/* Buttons */
+div[data-testid="stButton"] button {
+    border-radius: 8px;
+    font-weight: 500;
+}
+
+/* Input fields */
+div[data-testid="stTextInput"] input {
+    border-radius: 8px;
+    font-size: 15px;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background-color: #13161F;
+    border-right: 1px solid #2A2D3A;
+}
+
+/* Hide Streamlit footer */
+footer { visibility: hidden; }
+#MainMenu { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
