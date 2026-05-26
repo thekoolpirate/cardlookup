@@ -24,30 +24,19 @@ div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
     text-align: center; 
     margin-top: 1.5rem; 
 }
-.total-label { 
-    font-size: 0.8rem; 
-    color: #00C48C; 
-    font-weight: 600; 
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-}
-.total-value { 
-    font-size: 2.5rem; 
-    font-weight: 700; 
-    color: #FFFFFF;
-    margin-top: 4px;
-}
-section[data-testid="stSidebar"] {
-    background-color: #13161F;
-    border-right: 1px solid #2A2D3A;
-}
+.total-label { font-size: 0.8rem; color: #00C48C; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+.total-value { font-size: 2.5rem; font-weight: 700; color: #FFFFFF; margin-top: 4px; }
+.profit-card { background: #1A1D27; border: 1px solid #2A2D3A; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+.payout-value { font-size: 2rem; font-weight: 700; color: #00C48C; }
+.profit-value { font-size: 1.5rem; font-weight: 600; }
+.cl-number { font-size: 2rem; font-weight: 700; color: #00C48C; }
+section[data-testid="stSidebar"] { background-color: #13161F; border-right: 1px solid #2A2D3A; }
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("🃏 CardLookup")
-st.caption("Scan or enter PSA cert numbers — powered by CardLadder data")
 
 if "token" not in st.session_state:
     st.session_state.token = cookies.get("token") or None
@@ -59,6 +48,15 @@ if "results" not in st.session_state:
     st.session_state.results = {}
 if "last_scanned" not in st.session_state:
     st.session_state.last_scanned = ""
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = "Bulk Comp"
+if "payout_pct" not in st.session_state:
+    saved_pct = cookies.get("payout_pct")
+    st.session_state.payout_pct = float(saved_pct) if saved_pct else 93.0
+if "obo_result" not in st.session_state:
+    st.session_state.obo_result = None
+if "obo_buy_price" not in st.session_state:
+    st.session_state.obo_buy_price = None
 
 def get_token(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
@@ -159,23 +157,12 @@ def build_table():
     rows = []
     for cert in st.session_state.cert_list:
         if cert not in st.session_state.results:
-            rows.append({
-                "Cert #": cert, "Name": "Pending...", "Grade": "",
-                "CL Value": "", "Lowest Listed": "", "Avg Last 5": "",
-                "True Comp": "", "Sale 1": "", "Sale 2": "",
-                "Sale 3": "", "Sale 4": "", "Sale 5": ""
-            })
+            rows.append({"Cert #": cert, "Name": "Pending...", "Grade": "", "CL Value": "", "Lowest Listed": "", "Avg Last 5": "", "True Comp": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
             continue
         data = st.session_state.results[cert]
         if "error" in data:
-            rows.append({
-                "Cert #": cert, "Name": f"Error: {data['error']}", "Grade": "",
-                "CL Value": "", "Lowest Listed": "", "Avg Last 5": "",
-                "True Comp": "", "Sale 1": "", "Sale 2": "",
-                "Sale 3": "", "Sale 4": "", "Sale 5": ""
-            })
+            rows.append({"Cert #": cert, "Name": f"Error: {data['error']}", "Grade": "", "CL Value": "", "Lowest Listed": "", "Avg Last 5": "", "True Comp": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
             continue
-
         card = data["card"]
         cl = data["cl"]
         sales = data.get("sales", [])
@@ -184,7 +171,6 @@ def build_table():
         sale_prices = [s["price"] for s in sales if s.get("price") is not None]
         avg_last5 = sum(sale_prices) / len(sale_prices) if sale_prices else None
         true_comp = get_true_comp(cl_val, lowest_listing, avg_last5)
-
         row = {
             "Cert #": cert,
             "Name": card.get("label", "Unknown"),
@@ -202,6 +188,7 @@ def build_table():
         rows.append(row)
     return rows
 
+# ── Sidebar ──────────────────────────────────────────────
 with st.sidebar:
     st.header("Account")
     if st.session_state.logged_in:
@@ -226,100 +213,212 @@ with st.sidebar:
                     st.rerun()
                 else:
                     st.error("Login failed — check your credentials")
+
     st.divider()
-    st.header("Lookup mode")
-    auto_lookup = st.toggle("Auto lookup on scan", value=False)
-
-if st.session_state.logged_in:
-    st.success("Connected to CardLadder")
-
-    col_scan, col_clear = st.columns([4, 1])
-    with col_scan:
-        scanned = st.text_input(
-            "Scan or type cert number — press Enter after each",
-            placeholder="Scan barcode or type cert number...",
-            key="scanner_input"
-        )
-    with col_clear:
-        st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
-        if st.button("Clear all"):
-            st.session_state.cert_list = []
-            st.session_state.results = {}
-            st.session_state.last_scanned = ""
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    if scanned and scanned.strip() and scanned.strip() != st.session_state.last_scanned:
-        cert = scanned.strip()
-        st.session_state.last_scanned = cert
-        if cert not in st.session_state.cert_list:
-            st.session_state.cert_list.append(cert)
-            if auto_lookup:
-                with st.spinner(f"Looking up {cert}..."):
-                    st.session_state.results[cert] = lookup_cert(cert)
+    st.header("Mode")
+    mode = st.radio("", ["Bulk Comp", "One by One"], index=0 if st.session_state.app_mode == "Bulk Comp" else 1, label_visibility="collapsed")
+    if mode != st.session_state.app_mode:
+        st.session_state.app_mode = mode
         st.rerun()
 
-    if st.session_state.cert_list:
-        st.markdown(f"**{len(st.session_state.cert_list)} cert(s) scanned**")
-        st.markdown("**Scanned cert list:**")
+    st.divider()
+    st.header("Payout %")
+    payout_pct = st.number_input(
+        "Your payout percentage",
+        min_value=50.0, max_value=100.0,
+        value=st.session_state.payout_pct,
+        step=0.5,
+        format="%.1f"
+    )
+    if payout_pct != st.session_state.payout_pct:
+        st.session_state.payout_pct = payout_pct
+        cookies["payout_pct"] = str(payout_pct)
+        cookies.save()
 
-        for i, cert in enumerate(st.session_state.cert_list):
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                if cert in st.session_state.results and "card" in st.session_state.results[cert]:
-                    label = st.session_state.results[cert]["card"].get("label", cert)
-                    st.write(f"{i+1}. {label} ({cert})")
-                else:
-                    st.write(f"{i+1}. {cert}")
-            with col2:
-                if not auto_lookup and cert not in st.session_state.results:
-                    if st.button("Lookup", key=f"lookup_{cert}"):
-                        with st.spinner(f"Looking up {cert}..."):
-                            st.session_state.results[cert] = lookup_cert(cert)
+    if st.session_state.app_mode == "Bulk Comp":
+        st.divider()
+        st.header("Lookup mode")
+        auto_lookup = st.toggle("Auto lookup on scan", value=False)
+
+# ── Main content ─────────────────────────────────────────
+if st.session_state.logged_in:
+
+    # ── ONE BY ONE MODE ───────────────────────────────────
+    if st.session_state.app_mode == "One by One":
+        st.subheader("One by One — Profit Calculator")
+        st.caption(f"Payout rate: {st.session_state.payout_pct}% — adjust in sidebar")
+
+        cert_input = st.text_input(
+            "Enter or scan a cert number",
+            placeholder="Scan barcode or type cert number...",
+            key="obo_input"
+        )
+
+        if st.button("🔍 Look up", type="primary") and cert_input.strip():
+            with st.spinner("Looking up card..."):
+                result = lookup_cert(cert_input.strip())
+                st.session_state.obo_result = result
+                st.session_state.obo_buy_price = None
+
+        if st.session_state.obo_result:
+            data = st.session_state.obo_result
+            if "error" in data:
+                st.error(f"Error: {data['error']}")
+            else:
+                card = data["card"]
+                cl = data["cl"]
+                sales = data.get("sales", [])
+                lowest_listing = data.get("lowest_listing")
+                cl_val = cl.get("estimatedValue")
+                sale_prices = [s["price"] for s in sales if s.get("price") is not None]
+                avg_last5 = sum(sale_prices) / len(sale_prices) if sale_prices else None
+                payout_amt = (cl_val * st.session_state.payout_pct / 100) if cl_val else None
+
+                st.markdown("---")
+                st.markdown(f"### {card.get('label', 'Unknown')}")
+                st.caption(f"{grade_label(card.get('grade'))} · Cert #{cert_input.strip()}")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("CL Value", fmt_price(cl_val))
+                    st.caption("Your payout basis")
+                with col2:
+                    st.metric(f"Payout ({st.session_state.payout_pct}%)", fmt_price(payout_amt))
+                    st.caption("What you get paid")
+                with col3:
+                    st.metric("Avg Last 5", fmt_price(avg_last5))
+                    st.caption("Recent market avg")
+
+                st.markdown("---")
+                st.markdown("**Select your buy price:**")
+
+                buy_cols = st.columns(3)
+                with buy_cols[0]:
+                    if avg_last5 and st.button(f"Use Avg Last 5\n{fmt_price(avg_last5)}"):
+                        st.session_state.obo_buy_price = avg_last5
                         st.rerun()
-            with col3:
-                if st.button("🗑 Remove", key=f"remove_{cert}"):
-                    st.session_state.cert_list.remove(cert)
-                    if cert in st.session_state.results:
-                        del st.session_state.results[cert]
+                with buy_cols[1]:
+                    if lowest_listing:
+                        if st.button(f"Use Lowest Listed\n{fmt_price(lowest_listing)}"):
+                            st.session_state.obo_buy_price = lowest_listing
+                            st.rerun()
+                    else:
+                        st.button("Lowest Listed\n⏳ Pending API", disabled=True)
+                with buy_cols[2]:
+                    custom_price = st.number_input("Enter custom price", min_value=0.0, step=0.50, format="%.2f", key="custom_buy")
+                    if st.button("Use custom price"):
+                        st.session_state.obo_buy_price = custom_price
+                        st.rerun()
+
+                if st.session_state.obo_buy_price is not None:
+                    buy = st.session_state.obo_buy_price
+                    profit = payout_amt - buy if payout_amt else None
+                    st.markdown("---")
+                    res_col1, res_col2, res_col3 = st.columns(3)
+                    with res_col1:
+                        st.metric("Buy Price", fmt_price(buy))
+                    with res_col2:
+                        st.metric("Payout", fmt_price(payout_amt))
+                    with res_col3:
+                        st.metric("Profit", fmt_price(profit))
+
+                st.markdown("---")
+                if sales:
+                    st.markdown("**Last 5 sales:**")
+                    sale_cols = st.columns(len(sales))
+                    for idx, (sale, col) in enumerate(zip(sales, sale_cols)):
+                        col.metric(f"Sale {idx+1}", fmt_price(sale['price']), sale['date'])
+
+    # ── BULK COMP MODE ────────────────────────────────────
+    else:
+        st.caption("Scan or enter PSA cert numbers — bulk mode")
+        col_scan, col_clear = st.columns([4, 1])
+        with col_scan:
+            scanned = st.text_input(
+                "Scan or type cert number — press Enter after each",
+                placeholder="Scan barcode or type cert number...",
+                key="scanner_input"
+            )
+        with col_clear:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            if st.button("Clear all"):
+                st.session_state.cert_list = []
+                st.session_state.results = {}
+                st.session_state.last_scanned = ""
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        if scanned and scanned.strip() and scanned.strip() != st.session_state.last_scanned:
+            cert = scanned.strip()
+            st.session_state.last_scanned = cert
+            if cert not in st.session_state.cert_list:
+                st.session_state.cert_list.append(cert)
+                if auto_lookup:
+                    with st.spinner(f"Looking up {cert}..."):
+                        st.session_state.results[cert] = lookup_cert(cert)
+            st.rerun()
+
+        if st.session_state.cert_list:
+            st.markdown(f"**{len(st.session_state.cert_list)} cert(s) scanned**")
+            st.markdown("**Scanned cert list:**")
+
+            for i, cert in enumerate(st.session_state.cert_list):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    if cert in st.session_state.results and "card" in st.session_state.results[cert]:
+                        label = st.session_state.results[cert]["card"].get("label", cert)
+                        st.write(f"{i+1}. {label} ({cert})")
+                    else:
+                        st.write(f"{i+1}. {cert}")
+                with col2:
+                    if not auto_lookup and cert not in st.session_state.results:
+                        if st.button("Lookup", key=f"lookup_{cert}"):
+                            with st.spinner(f"Looking up {cert}..."):
+                                st.session_state.results[cert] = lookup_cert(cert)
+                            st.rerun()
+                with col3:
+                    if st.button("🗑 Remove", key=f"remove_{cert}"):
+                        st.session_state.cert_list.remove(cert)
+                        if cert in st.session_state.results:
+                            del st.session_state.results[cert]
+                        st.rerun()
+
+            st.divider()
+
+            if not auto_lookup:
+                if st.button("🔍 Lookup all cards", type="primary"):
+                    progress = st.progress(0)
+                    for i, cert in enumerate(st.session_state.cert_list):
+                        if cert not in st.session_state.results:
+                            with st.spinner(f"Looking up {cert}..."):
+                                st.session_state.results[cert] = lookup_cert(cert)
+                        progress.progress((i + 1) / len(st.session_state.cert_list))
                     st.rerun()
 
-        st.divider()
+            if st.session_state.results:
+                rows = build_table()
+                df = pd.DataFrame(rows)
+                st.markdown("### Results")
+                st.dataframe(df, use_container_width=True, hide_index=True)
 
-        if not auto_lookup:
-            if st.button("🔍 Lookup all cards", type="primary"):
-                progress = st.progress(0)
-                for i, cert in enumerate(st.session_state.cert_list):
-                    if cert not in st.session_state.results:
-                        with st.spinner(f"Looking up {cert}..."):
-                            st.session_state.results[cert] = lookup_cert(cert)
-                    progress.progress((i + 1) / len(st.session_state.cert_list))
-                st.rerun()
+                total_true_comp = sum(
+                    get_true_comp(
+                        st.session_state.results[c]["cl"].get("estimatedValue"),
+                        st.session_state.results[c].get("lowest_listing"),
+                        sum([s["price"] for s in st.session_state.results[c].get("sales", []) if s.get("price")]) /
+                        len([s for s in st.session_state.results[c].get("sales", []) if s.get("price")])
+                        if st.session_state.results[c].get("sales") else None
+                    ) or 0
+                    for c in st.session_state.cert_list
+                    if c in st.session_state.results and "cl" in st.session_state.results[c]
+                )
 
-        if st.session_state.results:
-            rows = build_table()
-            df = pd.DataFrame(rows)
-            st.markdown("### Results")
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            total_true_comp = sum(
-                get_true_comp(
-                    st.session_state.results[c]["cl"].get("estimatedValue"),
-                    st.session_state.results[c].get("lowest_listing"),
-                    sum([s["price"] for s in st.session_state.results[c].get("sales", []) if s.get("price")]) /
-                    len([s for s in st.session_state.results[c].get("sales", []) if s.get("price")])
-                    if st.session_state.results[c].get("sales") else None
-                ) or 0
-                for c in st.session_state.cert_list
-                if c in st.session_state.results and "cl" in st.session_state.results[c]
-            )
-
-            st.markdown(f"""
-            <div class='total-box'>
-                <div class='total-label'>Total True Comp ({len(st.session_state.results)} cards)</div>
-                <div class='total-value'>${total_true_comp:,.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class='total-box'>
+                    <div class='total-label'>Total True Comp ({len(st.session_state.results)} cards)</div>
+                    <div class='total-value'>${total_true_comp:,.0f}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 else:
     st.info("Enter your CardLadder login in the sidebar to get started")
