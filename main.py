@@ -5,6 +5,7 @@ from streamlit_cookies_manager import EncryptedCookieManager
 
 FIREBASE_API_KEY = "AIzaSyBqbxgaaGlpeb1F6HRvEW319OcuCsbkAHM"
 COOKIE_PASSWORD = "cardlookup-secret-key-2024"
+EBAY_APP_ID = "PASTE_YOUR_EBAY_APP_ID_HERE"
 
 cookies = EncryptedCookieManager(prefix="cardlookup/", password=COOKIE_PASSWORD)
 if not cookies.ready():
@@ -14,10 +15,7 @@ st.set_page_config(page_title="CardLookup", page_icon="🃏", layout="wide")
 
 st.markdown("""
 <style>
-/* Table styling */
 div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
-
-/* Total box */
 .total-box { 
     background: linear-gradient(135deg, #0F2A1E, #1A3D2B);
     border: 1px solid #00C48C33;
@@ -39,29 +37,10 @@ div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
     color: #FFFFFF;
     margin-top: 4px;
 }
-
-/* Success message */
-div[data-testid="stAlert"] { border-radius: 8px; }
-
-/* Buttons */
-div[data-testid="stButton"] button {
-    border-radius: 8px;
-    font-weight: 500;
-}
-
-/* Input fields */
-div[data-testid="stTextInput"] input {
-    border-radius: 8px;
-    font-size: 15px;
-}
-
-/* Sidebar */
 section[data-testid="stSidebar"] {
     background-color: #13161F;
     border-right: 1px solid #2A2D3A;
 }
-
-/* Hide Streamlit footer */
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
 </style>
@@ -118,6 +97,39 @@ def get_sales(cert, token):
             result.append({"price": float(price), "date": date})
     return result
 
+def get_lowest_ebay_listing(card_name, grade):
+    if EBAY_APP_ID == "PASTE_YOUR_EBAY_APP_ID_HERE":
+        return None
+    try:
+        grade_num = grade.replace("PSA ", "")
+        query = f"{card_name} PSA {grade_num}"
+        url = "https://svcs.ebay.com/services/search/FindingService/v1"
+        params = {
+            "OPERATION-NAME": "findItemsAdvanced",
+            "SERVICE-VERSION": "1.0.0",
+            "SECURITY-APPNAME": EBAY_APP_ID,
+            "RESPONSE-DATA-FORMAT": "JSON",
+            "REST-PAYLOAD": "",
+            "keywords": query,
+            "itemFilter(0).name": "ListingType",
+            "itemFilter(0).value": "FixedPrice",
+            "itemFilter(1).name": "Condition",
+            "itemFilter(1).value": "3000",
+            "sortOrder": "PricePlusShippingLowest",
+            "paginationInput.entriesPerPage": "5"
+        }
+        r = requests.get(url, params=params)
+        data = r.json()
+        items = data.get("findItemsAdvancedResponse", [{}])[0].get("searchResult", [{}])[0].get("item", [])
+        prices = []
+        for item in items:
+            price = float(item.get("sellingStatus", [{}])[0].get("currentPrice", [{}])[0].get("__value__", 0))
+            shipping = float(item.get("shippingInfo", [{}])[0].get("shippingServiceCost", [{}])[0].get("__value__", 0))
+            prices.append(price + shipping)
+        return min(prices) if prices else None
+    except:
+        return None
+
 def lookup_cert(cert):
     try:
         card = get_card_info(cert, st.session_state.token)
@@ -125,7 +137,9 @@ def lookup_cert(cert):
             return {"error": "Not found"}
         cl = get_cl_value(card.get("profileId"), card.get("grade"), st.session_state.token)
         sales = get_sales(cert, st.session_state.token)
-        return {"card": card, "cl": cl, "sales": sales}
+        grade = grade_label(card.get("grade"))
+        lowest_listing = get_lowest_ebay_listing(card.get("label", ""), grade)
+        return {"card": card, "cl": cl, "sales": sales, "lowest_listing": lowest_listing}
     except Exception as e:
         return {"error": str(e)}
 
@@ -137,28 +151,48 @@ def fmt_price(p):
     if p is None: return ""
     return f"${float(p):,.2f}"
 
+def get_true_comp(cl_val, lowest_listing, avg_last5):
+    values = [v for v in [cl_val, lowest_listing, avg_last5] if v is not None]
+    return min(values) if values else None
+
 def build_table():
     rows = []
     for cert in st.session_state.cert_list:
         if cert not in st.session_state.results:
-            rows.append({"Cert #": cert, "Name": "Pending...", "Grade": "", "CL Value": "", "Avg Last 5": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
+            rows.append({
+                "Cert #": cert, "Name": "Pending...", "Grade": "",
+                "CL Value": "", "Lowest Listed": "", "Avg Last 5": "",
+                "True Comp": "", "Sale 1": "", "Sale 2": "",
+                "Sale 3": "", "Sale 4": "", "Sale 5": ""
+            })
             continue
         data = st.session_state.results[cert]
         if "error" in data:
-            rows.append({"Cert #": cert, "Name": f"Error: {data['error']}", "Grade": "", "CL Value": "", "Avg Last 5": "", "Sale 1": "", "Sale 2": "", "Sale 3": "", "Sale 4": "", "Sale 5": ""})
+            rows.append({
+                "Cert #": cert, "Name": f"Error: {data['error']}", "Grade": "",
+                "CL Value": "", "Lowest Listed": "", "Avg Last 5": "",
+                "True Comp": "", "Sale 1": "", "Sale 2": "",
+                "Sale 3": "", "Sale 4": "", "Sale 5": ""
+            })
             continue
+
         card = data["card"]
         cl = data["cl"]
         sales = data.get("sales", [])
+        lowest_listing = data.get("lowest_listing")
         cl_val = cl.get("estimatedValue")
         sale_prices = [s["price"] for s in sales if s.get("price") is not None]
-        cl_avg = sum(sale_prices) / len(sale_prices) if sale_prices else None
+        avg_last5 = sum(sale_prices) / len(sale_prices) if sale_prices else None
+        true_comp = get_true_comp(cl_val, lowest_listing, avg_last5)
+
         row = {
             "Cert #": cert,
             "Name": card.get("label", "Unknown"),
             "Grade": grade_label(card.get("grade")),
             "CL Value": fmt_price(cl_val),
-            "Avg Last 5": fmt_price(cl_avg),
+            "Lowest Listed": fmt_price(lowest_listing) if lowest_listing else "⏳ Pending API",
+            "Avg Last 5": fmt_price(avg_last5),
+            "True Comp": fmt_price(true_comp),
         }
         for i in range(5):
             if i < len(sales):
@@ -268,18 +302,22 @@ if st.session_state.logged_in:
             st.markdown("### Results")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
-            total_cl = sum(
-                float(st.session_state.results[c]["cl"].get("estimatedValue", 0))
+            total_true_comp = sum(
+                get_true_comp(
+                    st.session_state.results[c]["cl"].get("estimatedValue"),
+                    st.session_state.results[c].get("lowest_listing"),
+                    sum([s["price"] for s in st.session_state.results[c].get("sales", []) if s.get("price")]) /
+                    len([s for s in st.session_state.results[c].get("sales", []) if s.get("price")])
+                    if st.session_state.results[c].get("sales") else None
+                ) or 0
                 for c in st.session_state.cert_list
-                if c in st.session_state.results
-                and "cl" in st.session_state.results[c]
-                and st.session_state.results[c]["cl"].get("estimatedValue")
+                if c in st.session_state.results and "cl" in st.session_state.results[c]
             )
 
             st.markdown(f"""
             <div class='total-box'>
-                <div class='total-label'>Total CL Value ({len(st.session_state.results)} cards)</div>
-                <div class='total-value'>${total_cl:,.0f}</div>
+                <div class='total-label'>Total True Comp ({len(st.session_state.results)} cards)</div>
+                <div class='total-value'>${total_true_comp:,.0f}</div>
             </div>
             """, unsafe_allow_html=True)
 
