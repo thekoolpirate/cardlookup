@@ -17,7 +17,6 @@ st.markdown("""
 .total-box { background: #EAF3DE; border-radius: 10px; padding: 1rem 1.5rem; text-align: center; margin-top: 1rem; }
 .total-label { font-size: 0.85rem; color: #3B6D11; font-weight: 500; }
 .total-value { font-size: 2rem; font-weight: 700; color: #1D9E75; }
-div[data-testid="stDataFrame"] table { font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,36 +55,21 @@ def get_cl_value(profile_id, grade, token):
     )
     return r.json().get("result", {})
 
-def get_sales(profile_id, grade, token):
-    url = "https://firestore.googleapis.com/v1/projects/cardladder-71d53/databases/(default)/documents:runQuery"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    query = {
-        "structuredQuery": {
-            "from": [{"collectionId": "sales"}],
-            "where": {
-                "compositeFilter": {
-                    "op": "AND",
-                    "filters": [
-                        {"fieldFilter": {"field": {"fieldPath": "profileId"}, "op": "EQUAL", "value": {"stringValue": profile_id}}},
-                        {"fieldFilter": {"field": {"fieldPath": "grade"}, "op": "EQUAL", "value": {"stringValue": grade}}}
-                    ]
-                }
-            },
-            "orderBy": [{"field": {"fieldPath": "date"}, "direction": "DESCENDING"}],
-            "limit": 5
-        }
-    }
-    r = requests.post(url, headers=headers, json=query)
-    docs = r.json()
-    sales = []
-    for doc in docs:
-        if "document" in doc:
-            fields = doc["document"].get("fields", {})
-            price = fields.get("price", {}).get("doubleValue") or fields.get("price", {}).get("integerValue")
-            date = fields.get("date", {}).get("timestampValue", "")[:10]
-            if price:
-                sales.append({"price": float(price), "date": date})
-    return sales
+def get_sales(cert, token):
+    r = requests.post(
+        "https://us-central1-cardladder-71d53.cloudfunctions.net/httpprofilesales",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"data": {"cert": str(cert), "grader": "psa", "limit": 5, "sort": "date", "direction": "desc"}}
+    )
+    data = r.json()
+    sales = data.get("result", {}).get("sales", [])
+    result = []
+    for s in sales[:5]:
+        price = s.get("price")
+        date = s.get("date", "")[:10]
+        if price is not None:
+            result.append({"price": float(price), "date": date})
+    return result
 
 def lookup_cert(cert):
     try:
@@ -93,7 +77,7 @@ def lookup_cert(cert):
         if not card:
             return {"error": "Not found"}
         cl = get_cl_value(card.get("profileId"), card.get("grade"), st.session_state.token)
-        sales = get_sales(card.get("profileId"), card.get("grade"), st.session_state.token)
+        sales = get_sales(cert, st.session_state.token)
         return {"card": card, "cl": cl, "sales": sales}
     except Exception as e:
         return {"error": str(e)}
@@ -104,7 +88,7 @@ def grade_label(g):
 
 def fmt_price(p):
     if p is None: return ""
-    return f"${float(p):,.0f}"
+    return f"${float(p):,.2f}"
 
 def build_table():
     rows = []
@@ -120,9 +104,8 @@ def build_table():
         cl = data["cl"]
         sales = data.get("sales", [])
         cl_val = cl.get("estimatedValue")
-        sale_prices = [s["price"] for s in sales if s.get("price")]
+        sale_prices = [s["price"] for s in sales if s.get("price") is not None]
         cl_avg = sum(sale_prices) / len(sale_prices) if sale_prices else None
-        sale_cols = {f"Sale {i+1}": fmt_price(sales[i]["price"]) + f"\n{sales[i]['date']}" if i < len(sales) else "" for i in range(5)}
         row = {
             "Cert #": cert,
             "Name": card.get("label", "Unknown"),
@@ -130,7 +113,11 @@ def build_table():
             "CL Value": fmt_price(cl_val),
             "Avg Last 5": fmt_price(cl_avg),
         }
-        row.update(sale_cols)
+        for i in range(5):
+            if i < len(sales):
+                row[f"Sale {i+1}"] = f"{fmt_price(sales[i]['price'])} ({sales[i]['date']})"
+            else:
+                row[f"Sale {i+1}"] = ""
         rows.append(row)
     return rows
 
@@ -193,8 +180,8 @@ if st.session_state.logged_in:
 
     if st.session_state.cert_list:
         st.markdown(f"**{len(st.session_state.cert_list)} cert(s) scanned**")
-
         st.markdown("**Scanned cert list:**")
+
         for i, cert in enumerate(st.session_state.cert_list):
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -231,14 +218,14 @@ if st.session_state.logged_in:
         if st.session_state.results:
             rows = build_table()
             df = pd.DataFrame(rows)
-
             st.markdown("### Results")
             st.dataframe(df, use_container_width=True, hide_index=True)
 
             total_cl = sum(
                 float(st.session_state.results[c]["cl"].get("estimatedValue", 0))
                 for c in st.session_state.cert_list
-                if c in st.session_state.results and "cl" in st.session_state.results[c]
+                if c in st.session_state.results
+                and "cl" in st.session_state.results[c]
                 and st.session_state.results[c]["cl"].get("estimatedValue")
             )
 
