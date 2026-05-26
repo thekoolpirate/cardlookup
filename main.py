@@ -1,8 +1,13 @@
 import streamlit as st
 import requests
-from datetime import datetime
+from streamlit_cookies_manager import EncryptedCookieManager
 
 FIREBASE_API_KEY = "AIzaSyBqbxgaaGlpeb1F6HRvEW319OcuCsbkAHM"
+COOKIE_PASSWORD = "cardlookup-secret-key-2024"
+
+cookies = EncryptedCookieManager(prefix="cardlookup/", password=COOKIE_PASSWORD)
+if not cookies.ready():
+    st.stop()
 
 st.set_page_config(page_title="CardLookup", page_icon="🃏", layout="wide")
 
@@ -18,19 +23,10 @@ st.markdown("""
 st.title("🃏 CardLookup")
 st.caption("Scan or enter PSA cert numbers — powered by CardLadder data")
 
-with st.sidebar:
-    st.header("Login")
-    email = st.text_input("CardLadder email")
-    password = st.text_input("CardLadder password", type="password")
-    login_btn = st.button("Login", type="primary")
-    st.divider()
-    st.header("Lookup mode")
-    auto_lookup = st.toggle("Auto lookup on scan", value=False, help="When ON, each cert is looked up instantly. When OFF, scan all first then click Lookup All.")
-
 if "token" not in st.session_state:
-    st.session_state.token = None
+    st.session_state.token = cookies.get("token") or None
 if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+    st.session_state.logged_in = bool(st.session_state.token)
 if "cert_list" not in st.session_state:
     st.session_state.cert_list = []
 if "results" not in st.session_state:
@@ -60,7 +56,7 @@ def get_cl_value(profile_id, grade, token):
     return r.json().get("result", {})
 
 def get_sales(profile_id, grade, token):
-    url = f"https://firestore.googleapis.com/v1/projects/cardladder-71d53/databases/(default)/documents:runQuery"
+    url = "https://firestore.googleapis.com/v1/projects/cardladder-71d53/databases/(default)/documents:runQuery"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     query = {
         "structuredQuery": {
@@ -109,15 +105,33 @@ def fmt_price(p):
     if p is None: return "N/A"
     return f"${float(p):,.0f}"
 
-if login_btn:
-    with st.spinner("Logging in..."):
-        token = get_token(email, password)
-        if token:
-            st.session_state.token = token
-            st.session_state.logged_in = True
-            st.sidebar.success("Logged in!")
-        else:
-            st.sidebar.error("Login failed — check your credentials")
+with st.sidebar:
+    st.header("Account")
+    if st.session_state.logged_in:
+        st.success("Logged in")
+        if st.button("Log out"):
+            cookies["token"] = ""
+            cookies.save()
+            st.session_state.token = None
+            st.session_state.logged_in = False
+            st.rerun()
+    else:
+        email = st.text_input("CardLadder email")
+        password = st.text_input("CardLadder password", type="password")
+        if st.button("Login", type="primary"):
+            with st.spinner("Logging in..."):
+                token = get_token(email, password)
+                if token:
+                    st.session_state.token = token
+                    st.session_state.logged_in = True
+                    cookies["token"] = token
+                    cookies.save()
+                    st.rerun()
+                else:
+                    st.error("Login failed — check your credentials")
+    st.divider()
+    st.header("Lookup mode")
+    auto_lookup = st.toggle("Auto lookup on scan", value=False)
 
 if st.session_state.logged_in:
     st.success("Connected to CardLadder")
@@ -150,8 +164,8 @@ if st.session_state.logged_in:
 
     if st.session_state.cert_list:
         st.markdown(f"**{len(st.session_state.cert_list)} cert(s) scanned**")
-
         st.markdown("**Scanned cert list:**")
+
         for i, cert in enumerate(st.session_state.cert_list):
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -187,7 +201,6 @@ if st.session_state.logged_in:
 
         if st.session_state.results:
             total_cl = 0
-            total_cl_avg = 0
 
             for cert in st.session_state.cert_list:
                 if cert not in st.session_state.results:
@@ -206,8 +219,6 @@ if st.session_state.logged_in:
 
                 sale_prices = [s["price"] for s in sales if s.get("price")]
                 cl_avg = sum(sale_prices) / len(sale_prices) if sale_prices else None
-                if cl_avg:
-                    total_cl_avg += cl_avg
 
                 with st.container(border=True):
                     col1, col2 = st.columns([3, 1])
